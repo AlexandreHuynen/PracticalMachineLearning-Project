@@ -1,0 +1,135 @@
+---
+title: "Personal activity: How well do we exercise ?"
+author: "Alexandre Huynen"
+date: "4/28/2017"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Background
+
+Using devices such as *Jawbone Up*, *Nike FuelBand*, and *Fitbit* it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways:
+
+* According to the specification (Class A)
+* Throwing the elbows to the front (Class B)
+* Lifting the dumbbell only halfway (Class C)
+* Lowering the dumbbell only halfway (Class D)
+* Throwing the hips to the front (Class E)
+
+The goal of this project is to predict the manner in which they did the exercise, i.e., Class A to E. This is the `classe` variable in the training set. To this end, one may use any of the other variables to predict with.
+
+More information is available in the section on the Weight Lifting Exercise Dataset on this [website](http://groupware.les.inf.puc-rio.br/har).
+
+# Data exploration and processing
+
+The raw training data set contains 19.622 observations of 160 varibales. After a brief exploratory data analysis (not presented here for brevity reasons), it appears that a few variables have a high proportion of `NA` values. In this analysis, we chose to disregard these variables as well as the ones with near zero variance. Finally, it is chosen to ignore the `X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, num_window` variables, present in both training and testing sets and which corresponds to the data frame index, informations about the user or time and which have a poor predictive power. Similarly, in the testing data set, we ignore the `problem_id` variable which also corresponds to the data frame index.
+
+
+```{r, echo = FALSE}
+library(caret)
+
+url.train <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+url.test <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+
+df.train <- read.csv(url.train)
+df.test <- read.csv(url.test)
+
+# Variables with high proportion of NA
+mostlyNA <- which(sapply(df.train, function(x) mean(is.na(x) | x == '') > 0.95))
+
+# Variables with near zero variance
+nearzeroVAR <- nearZeroVar(df.train)
+
+# Variables with poor predictive power
+poorPRED <- c('X', 'user_name', 'raw_timestamp_part_1', 'raw_timestamp_part_2', 'cvtd_timestamp', 'num_window','problem_id')
+
+# Remove these variables
+df.learning <- df.train[, -union(which(names(df.train) %in% poorPRED),
+                              union(mostlyNA, nearzeroVAR))]
+df.quizz <- df.test[, -union(which(names(df.test) %in% poorPRED), 
+                            union(mostlyNA, nearzeroVAR))]
+```
+
+To be able to estimate the out-of-sample error, we randomly split the training data set (`df.learning`) into a smaller training set `training` and a validation set `testing`.
+
+```{r}
+set.seed(2307) # For reproductibility reasons
+inTrain <- createDataPartition(y = df.train$classe, p = 0.7, list = FALSE)
+training <- df.learning[inTrain, ]
+testing <- df.learning[-inTrain, ]
+```
+
+# Machine learning models
+
+In the following analysis, we impose a 5-fold cross validation.
+```{r}
+tr.control <- trainControl(method = "cv", number = 5)
+```
+
+## CART
+
+The first model to be considered is a standard classification trees method. The resulting accuracy is relatively poor and we are not confident in the prediction of this model.
+```{r}
+fit.rpart <- train(classe ~ ., data = training, method = "rpart", trControl = tr.control)
+pred.rpart <- predict(fit.rpart, testing)
+
+res.rpart <- confusionMatrix(pred.rpart, testing$classe)$overall
+print(res.rpart)
+```
+
+## Generalized boosted regression
+
+The generalized boosted regression leads to a significantly improved prediction accuracy.
+```{r}
+fit.gbm <- train(classe ~ ., data = training, method = "gbm", trControl = tr.control, verbose = FALSE)
+pred.gbm <- predict(fit.gbm, testing)
+
+res.gbm <- confusionMatrix(pred.gbm, testing$classe)$overall
+print(res.gbm)
+```
+
+## Random forest
+
+Finally, the random forest decision trees method further improve the prediction accuracy and our confidence in the model.
+```{r}
+fit.rf <- train(classe ~ ., data = training, method = "rf", trControl = tr.control)
+pred.rf <- predict(fit.rf, testing)
+
+res.rf <- confusionMatrix(pred.rf, testing$classe)$overall
+print(res.rf)
+```
+
+# Testing and conclusions
+
+In conclusion, for this data set, the random forest decision trees method seems to lead to the best out of sample accuracy. However, to further improve on this model, we stack the predictors obtained with the previous models together using random forest decision trees.
+
+
+```{r}
+df.pred <- data.frame(rpart = pred.rpart, gbm = pred.gbm, rf = pred.rf, classe = testing$classe)
+fit.tot <- train(classe ~., data = df.pred, method = 'rf')
+pred.tot <- predict(fit.tot, df.pred)
+
+res.tot <- confusionMatrix(pred.tot, testing$classe)$overall
+print(res.tot)
+```
+
+This doesn't seem improve the prediction accuracy and leads to an expected out of sample error of about `1-0.991 = 0.009` which is rather good.
+
+# Quiz prediction
+
+```{r}
+pred.quiz <- data.frame(rpart = predict(fit.rpart, df.quizz), 
+                        gbm = predict(fit.gbm, df.quizz), 
+                        rf = predict(fit.rf, df.quizz))
+pred.quiz$tot <- predict(fit.tot, pred.quiz)
+print(pred.quiz)
+```
+
+# References
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [**Qualitative Activity Recognition of Weight Lifting Exercises.**](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201) Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
